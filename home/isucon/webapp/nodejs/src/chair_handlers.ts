@@ -181,7 +181,7 @@ export const chairPostRideStatus = async (ctx: Context<Environment>) => {
   await ctx.var.dbConn.beginTransaction();
   try {
     const [[ride]] = await ctx.var.dbConn.query<Array<Ride & RowDataPacket>>(
-      "SELECT * FROM rides WHERE id = ? FOR UPDATE",
+      "SELECT * FROM rides WHERE id = ?",
       [rideID],
     );
     if (!ride) {
