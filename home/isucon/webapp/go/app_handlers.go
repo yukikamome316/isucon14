@@ -763,44 +763,53 @@ func appGetNotification(w http.ResponseWriter, r *http.Request) {
 func getChairStats(ctx context.Context, tx *sqlx.Tx, chairID string) (appGetNotificationResponseChairStats, error) {
 	stats := appGetNotificationResponseChairStats{}
 
-	rides := []Ride{}
+	type rideData struct {
+		ID         string  `db:"id"`
+		Evaluation *int    `db:"evaluation"`
+		Status     string  `db:"status"`
+		CreatedAt  float64 `db:"created_at"`
+	}
+
+	rideDataList := []rideData{}
 	err := tx.SelectContext(
 		ctx,
-		&rides,
-		`SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC`,
+		&rideDataList,
+		`SELECT r.id, r.evaluation, rs.status, UNIX_TIMESTAMP(rs.created_at) as created_at
+		 FROM rides r
+		 JOIN ride_statuses rs ON r.id = rs.ride_id
+		 WHERE r.chair_id = ?
+		 ORDER BY rs.created_at DESC`,
 		chairID,
 	)
 	if err != nil {
 		return stats, err
 	}
 
+	if len(rideDataList) == 0 {
+		return stats, nil
+	}
+
 	totalRideCount := 0
 	totalEvaluation := 0.0
-	for _, ride := range rides {
-		rideStatuses := []RideStatus{}
-		err = tx.SelectContext(
-			ctx,
-			&rideStatuses,
-			`SELECT * FROM ride_statuses WHERE ride_id = ? ORDER BY created_at`,
-			ride.ID,
-		)
-		if err != nil {
-			return stats, err
-		}
+	rideStatusMap := make(map[string][]rideData)
+	for _, data := range rideDataList {
+		rideStatusMap[data.ID] = append(rideStatusMap[data.ID], data)
+	}
 
-		var arrivedAt, pickupedAt *time.Time
+	for _, rideStatuses := range rideStatusMap {
+		var arrivedAt, pickedUpAt int64
 		var isCompleted bool
 		for _, status := range rideStatuses {
 			if status.Status == "ARRIVED" {
-				arrivedAt = &status.CreatedAt
+				arrivedAt = int64(status.CreatedAt)
 			} else if status.Status == "CARRYING" {
-				pickupedAt = &status.CreatedAt
+				pickedUpAt = int64(status.CreatedAt)
 			}
 			if status.Status == "COMPLETED" {
 				isCompleted = true
 			}
 		}
-		if arrivedAt == nil || pickupedAt == nil {
+		if arrivedAt == 0 || pickedUpAt == 0 {
 			continue
 		}
 		if !isCompleted {
@@ -808,7 +817,7 @@ func getChairStats(ctx context.Context, tx *sqlx.Tx, chairID string) (appGetNoti
 		}
 
 		totalRideCount++
-		totalEvaluation += float64(*ride.Evaluation)
+		totalEvaluation += float64(*rideStatuses[0].Evaluation)
 	}
 
 	stats.TotalRidesCount = totalRideCount
