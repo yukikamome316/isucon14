@@ -774,23 +774,38 @@ func getChairStats(ctx context.Context, tx *sqlx.Tx, chairID string) (appGetNoti
 		return stats, err
 	}
 
+	if len(rides) == 0 {
+		return stats, nil
+	}
+
+	rideIDs := make([]string, len(rides))
+	for i, ride := range rides {
+		rideIDs[i] = ride.ID
+	}
+
+	rideStatuses := []RideStatus{}
+	query, args, err := sqlx.In(`SELECT * FROM ride_statuses WHERE ride_id IN (?) ORDER BY created_at`, rideIDs)
+	if err != nil {
+		return stats, err
+	}
+	query = tx.Rebind(query)
+	err = tx.SelectContext(ctx, &rideStatuses, query, args...)
+	if err != nil {
+		return stats, err
+	}
+
 	totalRideCount := 0
 	totalEvaluation := 0.0
-	for _, ride := range rides {
-		rideStatuses := []RideStatus{}
-		err = tx.SelectContext(
-			ctx,
-			&rideStatuses,
-			`SELECT * FROM ride_statuses WHERE ride_id = ? ORDER BY created_at`,
-			ride.ID,
-		)
-		if err != nil {
-			return stats, err
-		}
+	rideStatusMap := make(map[string][]RideStatus)
+	for _, status := range rideStatuses {
+		rideStatusMap[status.RideID] = append(rideStatusMap[status.RideID], status)
+	}
 
+	for _, ride := range rides {
+		statuses := rideStatusMap[ride.ID]
 		var arrivedAt, pickupedAt *time.Time
 		var isCompleted bool
-		for _, status := range rideStatuses {
+		for _, status := range statuses {
 			if status.Status == "ARRIVED" {
 				arrivedAt = &status.CreatedAt
 			} else if status.Status == "CARRYING" {
