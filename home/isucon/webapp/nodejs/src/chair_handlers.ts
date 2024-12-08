@@ -134,7 +134,7 @@ export const chairGetNotification = async (ctx: Context<Environment>) => {
       : await getLatestRideStatus(ctx.var.dbConn, ride.id);
 
     const [[user]] = await ctx.var.dbConn.query<Array<User & RowDataPacket>>(
-      "SELECT * FROM users WHERE id = ? FOR SHARE",
+      "SELECT * FROM users WHERE id = ?",
       [ride.user_id],
     );
 
