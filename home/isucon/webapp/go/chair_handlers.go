@@ -186,9 +186,8 @@ type chairGetNotificationResponseData struct {
 }
 
 // グローバルキャッシュの初期化
-var rideCache = cache.NewWriteHeavyCache[string, *Ride]()            // Rideデータ用キャッシュ
-var rideStatusCache = cache.NewWriteHeavyCache[string, RideStatus]() // RideStatusデータ用キャッシュ
-var userCache = cache.NewWriteHeavyCache[string, *User]()            // Userデータ用キャッシュ (キーをstring型に変更)
+var rideCache = cache.NewWriteHeavyCache[string, *Ride]() // Rideデータ用キャッシュ
+var userCache = cache.NewWriteHeavyCache[string, *User]() // Userデータ用キャッシュ (キーをstring型に変更)
 
 func chairGetNotification(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -225,26 +224,21 @@ func chairGetNotification(w http.ResponseWriter, r *http.Request) {
 		rideCache.Set(cacheKeyRide, ride)
 	}
 
-	// RideStatusデータをキャッシュから取得
-	cacheKeyRideStatus := ride.ID // キーを文字列化
-	yetSentRideStatus, found = rideStatusCache.Get(cacheKeyRideStatus)
-	if !found {
-		err = tx.GetContext(ctx, &yetSentRideStatus, "SELECT * FROM ride_statuses WHERE ride_id = ? AND chair_sent_at IS NULL ORDER BY created_at ASC LIMIT 1", ride.ID)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				status, err = getLatestRideStatus(ctx, tx, ride.ID)
-				if err != nil {
-					writeError(w, http.StatusInternalServerError, err)
-					return
-				}
-			} else {
+	// RideStatusデータ
+	err = tx.GetContext(ctx, &yetSentRideStatus, "SELECT * FROM ride_statuses WHERE ride_id = ? AND chair_sent_at IS NULL ORDER BY created_at ASC LIMIT 1", ride.ID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			status, err = getLatestRideStatus(ctx, tx, ride.ID)
+			if err != nil {
 				writeError(w, http.StatusInternalServerError, err)
 				return
 			}
 		} else {
-			status = yetSentRideStatus.Status
-			rideStatusCache.Set(cacheKeyRideStatus, yetSentRideStatus)
+			writeError(w, http.StatusInternalServerError, err)
+			return
 		}
+	} else {
+		status = yetSentRideStatus.Status
 	}
 
 	// Userデータをキャッシュから取得
@@ -267,8 +261,6 @@ func chairGetNotification(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		// キャッシュの更新
-		rideStatusCache.Delete(cacheKeyRideStatus)
 	}
 
 	// トランザクションのコミット
