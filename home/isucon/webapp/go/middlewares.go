@@ -35,6 +35,10 @@ import (
 // }
 
 // appAuthMiddlewareをcacheを使って高速化
+// グローバルキャッシュの初期化
+var appUserCache = cache.NewWriteHeavyCache[string, *User]() // キャッシュをグローバルで共有
+
+// ミドルウェア関数の修正
 func appAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -44,31 +48,35 @@ func appAuthMiddleware(next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, errors.New("app_session cookie is required"))
 			return
 		}
-		
-		// access_token, userでキャッシュを取得
-		ca := cache.NewWriteHeavyCache[string, *User]()
+
+		// Cookieの値を取得
 		accessToken := c.Value
-		user, found := ca.Get(accessToken)
+
+		// キャッシュからユーザー情報を取得
+		user, found := appUserCache.Get(accessToken)
 		if !found {
-			if user == nil {
-				user = &User{}
-				err = db.GetContext(ctx, user, "SELECT * FROM users WHERE access_token = ?", accessToken)
-				if err != nil {
-					if errors.Is(err, sql.ErrNoRows) {
-						writeError(w, http.StatusUnauthorized, errors.New("invalid access token"))
-						return
-					}
-					writeError(w, http.StatusInternalServerError, err)
+			// キャッシュにデータがなければデータベースから取得
+			user = &User{}
+			err = db.GetContext(ctx, user, "SELECT * FROM users WHERE access_token = ?", accessToken)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					writeError(w, http.StatusUnauthorized, errors.New("invalid access token"))
 					return
 				}
-				ca.Set(accessToken, user)
+				writeError(w, http.StatusInternalServerError, err)
+				return
 			}
+
+			// キャッシュに保存（TTLは設定しない）
+			appUserCache.Set(accessToken, user)
 		}
 
+		// コンテキストにユーザー情報を設定
 		ctx = context.WithValue(ctx, "user", user)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
+
 
 func ownerAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -120,34 +128,36 @@ func ownerAuthMiddleware(next http.Handler) http.Handler {
 // }
 
 // chairAuthMiddlewareをcacheを使って高速化
-func chairAuthMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-		c, err := r.Cookie("chair_session")
-		if errors.Is(err, http.ErrNoCookie) || c.Value == "" {
-			writeError(w, http.StatusUnauthorized, errors.New("chair_session cookie is required"))
-			return
-		}
-		ca := cache.NewWriteHeavyCache[string, *Chair]()
-		accessToken := c.Value
-		chair, found := ca.Get(accessToken)
-		if !found {
-			if chair == nil {
-				chair = &Chair{}
-				err = db.GetContext(ctx, chair, "SELECT * FROM chairs WHERE access_token = ?", accessToken)
-				if err != nil {
-					if errors.Is(err, sql.ErrNoRows) {
-						writeError(w, http.StatusUnauthorized, errors.New("invalid access token"))
-						return
-					}
-					writeError(w, http.StatusInternalServerError, err)
-					return
-				}
-				ca.Set(accessToken, chair)
-			}
-		}
+var chairCache = cache.NewWriteHeavyCache[string, *Chair]() // グローバルキャッシュ
 
-		ctx = context.WithValue(ctx, "chair", chair)
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
+func chairAuthMiddleware(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        ctx := r.Context()
+        c, err := r.Cookie("chair_session")
+        if errors.Is(err, http.ErrNoCookie) || c.Value == "" {
+            writeError(w, http.StatusUnauthorized, errors.New("chair_session cookie is required"))
+            return
+        }
+
+        accessToken := c.Value
+        chair, found := chairCache.Get(accessToken)
+        if !found {
+            chair = &Chair{}
+            err = db.GetContext(ctx, chair, "SELECT * FROM chairs WHERE access_token = ?", accessToken)
+            if err != nil {
+                if errors.Is(err, sql.ErrNoRows) {
+                    writeError(w, http.StatusUnauthorized, errors.New("invalid access token"))
+                    return
+                }
+                writeError(w, http.StatusInternalServerError, err)
+                return
+            }
+
+            // キャッシュに保存（TTLは設定しない）
+			chairCache.Set(accessToken, chair)
+        }
+
+        ctx = context.WithValue(ctx, "chair", chair)
+        next.ServeHTTP(w, r.WithContext(ctx))
+    })
 }
