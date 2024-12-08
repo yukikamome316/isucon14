@@ -225,7 +225,7 @@ func chairGetNotification(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user := &User{}
-	err = tx.GetContext(ctx, user, "SELECT * FROM users WHERE id = ?", yetSentRideStatus.RideID)
+	err = tx.GetContext(ctx, user, "SELECT * FROM users WHERE id = ?", ride.UserID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -246,10 +246,18 @@ func chairGetNotification(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, &chairGetNotificationResponse{
 		Data: &chairGetNotificationResponseData{
-			RideID: yetSentRideStatus.RideID,
+			RideID: ride.ID,
 			User: simpleUser{
 				ID:   user.ID,
 				Name: fmt.Sprintf("%s %s", user.Firstname, user.Lastname),
+			},
+			PickupCoordinate: Coordinate{
+				Latitude:  ride.PickupLatitude,
+				Longitude: ride.PickupLongitude,
+			},
+			DestinationCoordinate: Coordinate{
+				Latitude:  ride.DestinationLatitude,
+				Longitude: ride.DestinationLongitude,
 			},
 			Status: status,
 		},
