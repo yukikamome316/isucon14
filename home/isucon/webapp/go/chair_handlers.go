@@ -225,7 +225,7 @@ func chairGetNotification(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user := &User{}
-	err = tx.GetContext(ctx, user, "SELECT * FROM users WHERE id = ? FOR SHARE", ride.UserID)
+	err = tx.GetContext(ctx, user, "SELECT * FROM users WHERE id = ?", ride.UserID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -289,7 +289,7 @@ func chairPostRideStatus(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback()
 
 	ride := &Ride{}
-	if err := tx.GetContext(ctx, ride, "SELECT * FROM rides WHERE id = ? FOR UPDATE", rideID); err != nil {
+	if err := tx.GetContext(ctx, ride, "SELECT * FROM rides WHERE id = ?", rideID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, errors.New("ride not found"))
 			return
