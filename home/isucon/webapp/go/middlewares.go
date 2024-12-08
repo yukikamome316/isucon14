@@ -94,6 +94,32 @@ func ownerAuthMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// func chairAuthMiddleware(next http.Handler) http.Handler {
+// 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// 		ctx := r.Context()
+// 		c, err := r.Cookie("chair_session")
+// 		if errors.Is(err, http.ErrNoCookie) || c.Value == "" {
+// 			writeError(w, http.StatusUnauthorized, errors.New("chair_session cookie is required"))
+// 			return
+// 		}
+// 		accessToken := c.Value
+// 		chair := &Chair{}
+// 		err = db.GetContext(ctx, chair, "SELECT * FROM chairs WHERE access_token = ?", accessToken)
+// 		if err != nil {
+// 			if errors.Is(err, sql.ErrNoRows) {
+// 				writeError(w, http.StatusUnauthorized, errors.New("invalid access token"))
+// 				return
+// 			}
+// 			writeError(w, http.StatusInternalServerError, err)
+// 			return
+// 		}
+
+// 		ctx = context.WithValue(ctx, "chair", chair)
+// 		next.ServeHTTP(w, r.WithContext(ctx))
+// 	})
+// }
+
+// chairAuthMiddlewareをcacheを使って高速化
 func chairAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -102,16 +128,23 @@ func chairAuthMiddleware(next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, errors.New("chair_session cookie is required"))
 			return
 		}
+		ca := cache.NewWriteHeavyCache[string, *Chair]()
 		accessToken := c.Value
-		chair := &Chair{}
-		err = db.GetContext(ctx, chair, "SELECT * FROM chairs WHERE access_token = ?", accessToken)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				writeError(w, http.StatusUnauthorized, errors.New("invalid access token"))
-				return
+		chair, found := ca.Get(accessToken)
+		if !found {
+			if chair == nil {
+				chair = &Chair{}
+				err = db.GetContext(ctx, chair, "SELECT * FROM chairs WHERE access_token = ?", accessToken)
+				if err != nil {
+					if errors.Is(err, sql.ErrNoRows) {
+						writeError(w, http.StatusUnauthorized, errors.New("invalid access token"))
+						return
+					}
+					writeError(w, http.StatusInternalServerError, err)
+					return
+				}
+				ca.Set(accessToken, chair)
 			}
-			writeError(w, http.StatusInternalServerError, err)
-			return
 		}
 
 		ctx = context.WithValue(ctx, "chair", chair)
