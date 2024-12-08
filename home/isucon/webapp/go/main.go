@@ -15,11 +15,16 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
+	_ "net/http/pprof"
 )
 
 var db *sqlx.DB
 
 func main() {
+	//pprof設定
+	go func() { 
+		fmt.Println(http.ListenAndServe("localhost:6060", nil)) 
+	}()
 	mux := setup()
 	slog.Info("Listening on :8080")
 	http.ListenAndServe(":8080", mux)
