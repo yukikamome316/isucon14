@@ -194,23 +194,24 @@ func chairGetNotification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
+
 	ride := &Ride{}
 	yetSentRideStatus := RideStatus{}
 	status := ""
 
-	if err := tx.GetContext(ctx, ride, `SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC LIMIT 1`, chair.ID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			writeJSON(w, http.StatusOK, &chairGetNotificationResponse{
-				RetryAfterMs: 30,
-			})
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
+	// rides と ride_statuses を結合して最新の状態を取得
+	query := `
+		SELECT rs.id, rs.ride_id, rs.status
+		FROM rides AS r
+		INNER JOIN ride_statuses AS rs ON r.id = rs.ride_id
+		WHERE r.chair_id = ? AND rs.chair_sent_at IS NULL
+		ORDER BY rs.created_at ASC
+		LIMIT 1;
+	`
 
-	if err := tx.GetContext(ctx, &yetSentRideStatus, `SELECT * FROM ride_statuses WHERE ride_id = ? AND chair_sent_at IS NULL ORDER BY created_at ASC LIMIT 1`, ride.ID); err != nil {
+	if err := tx.GetContext(ctx, &yetSentRideStatus, query, chair.ID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			// ride_statusが存在しない場合の処理
 			status, err = getLatestRideStatus(ctx, tx, ride.ID)
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, err)
@@ -225,7 +226,7 @@ func chairGetNotification(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user := &User{}
-	err = tx.GetContext(ctx, user, "SELECT * FROM users WHERE id = ? FOR SHARE", ride.UserID)
+	err = tx.GetContext(ctx, user, "SELECT * FROM users WHERE id = ? FOR SHARE", yetSentRideStatus.RideID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -246,18 +247,10 @@ func chairGetNotification(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, &chairGetNotificationResponse{
 		Data: &chairGetNotificationResponseData{
-			RideID: ride.ID,
+			RideID: yetSentRideStatus.RideID,
 			User: simpleUser{
 				ID:   user.ID,
 				Name: fmt.Sprintf("%s %s", user.Firstname, user.Lastname),
-			},
-			PickupCoordinate: Coordinate{
-				Latitude:  ride.PickupLatitude,
-				Longitude: ride.PickupLongitude,
-			},
-			DestinationCoordinate: Coordinate{
-				Latitude:  ride.DestinationLatitude,
-				Longitude: ride.DestinationLongitude,
 			},
 			Status: status,
 		},
