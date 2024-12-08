@@ -764,10 +764,10 @@ func getChairStats(ctx context.Context, tx *sqlx.Tx, chairID string) (appGetNoti
 	stats := appGetNotificationResponseChairStats{}
 
 	type rideData struct {
-		ID         string `db:"id"`
-		Evaluation *int   `db:"evaluation"`
-		Status     string `db:"status"`
-		CreatedAt  int64  `db:"created_at"`
+		ID         string  `db:"id"`
+		Evaluation *int    `db:"evaluation"`
+		Status     string  `db:"status"`
+		CreatedAt  float64 `db:"created_at"`
 	}
 
 	rideDataList := []rideData{}
@@ -797,19 +797,19 @@ func getChairStats(ctx context.Context, tx *sqlx.Tx, chairID string) (appGetNoti
 	}
 
 	for _, rideStatuses := range rideStatusMap {
-		var arrivedAt, pickupedAt int64
+		var arrivedAt, pickedUpAt int64
 		var isCompleted bool
 		for _, status := range rideStatuses {
 			if status.Status == "ARRIVED" {
-				arrivedAt = status.CreatedAt
+				arrivedAt = int64(status.CreatedAt)
 			} else if status.Status == "CARRYING" {
-				pickupedAt = status.CreatedAt
+				pickedUpAt = int64(status.CreatedAt)
 			}
 			if status.Status == "COMPLETED" {
 				isCompleted = true
 			}
 		}
-		if arrivedAt == 0 || pickupedAt == 0 {
+		if arrivedAt == 0 || pickedUpAt == 0 {
 			continue
 		}
 		if !isCompleted {
