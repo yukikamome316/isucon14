@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/catatsuy/cache"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -184,66 +185,99 @@ type chairGetNotificationResponseData struct {
 	Status                string     `json:"status"`
 }
 
+// グローバルキャッシュの初期化
+var rideCache = cache.NewWriteHeavyCache[string, *Ride]()            // Rideデータ用キャッシュ
+var rideStatusCache = cache.NewWriteHeavyCache[string, RideStatus]() // RideStatusデータ用キャッシュ
+var userCache = cache.NewWriteHeavyCache[string, *User]()            // Userデータ用キャッシュ (キーをstring型に変更)
+
 func chairGetNotification(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	chair := ctx.Value("chair").(*Chair)
 
+	// トランザクションの開始
 	tx, err := db.Beginx()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	defer tx.Rollback()
-	ride := &Ride{}
-	yetSentRideStatus := RideStatus{}
-	status := ""
 
-	if err := tx.GetContext(ctx, ride, `SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC LIMIT 1`, chair.ID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			writeJSON(w, http.StatusOK, &chairGetNotificationResponse{
-				RetryAfterMs: 30,
-			})
+	var ride *Ride
+	var status string
+	var yetSentRideStatus RideStatus
+
+	// Rideデータをキャッシュから取得
+	cacheKeyRide := chair.ID // キーを文字列化
+	ride, found := rideCache.Get(cacheKeyRide)
+	if !found {
+		ride = &Ride{}
+		err = tx.GetContext(ctx, ride, "SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC LIMIT 1", chair.ID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				writeJSON(w, http.StatusOK, &chairGetNotificationResponse{
+					RetryAfterMs: 30,
+				})
+				return
+			}
+			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err)
-		return
+		rideCache.Set(cacheKeyRide, ride)
 	}
 
-	if err := tx.GetContext(ctx, &yetSentRideStatus, `SELECT * FROM ride_statuses WHERE ride_id = ? AND chair_sent_at IS NULL ORDER BY created_at ASC LIMIT 1`, ride.ID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			status, err = getLatestRideStatus(ctx, tx, ride.ID)
-			if err != nil {
+	// RideStatusデータをキャッシュから取得
+	cacheKeyRideStatus := ride.ID // キーを文字列化
+	yetSentRideStatus, found = rideStatusCache.Get(cacheKeyRideStatus)
+	if !found {
+		err = tx.GetContext(ctx, &yetSentRideStatus, "SELECT * FROM ride_statuses WHERE ride_id = ? AND chair_sent_at IS NULL ORDER BY created_at ASC LIMIT 1", ride.ID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				status, err = getLatestRideStatus(ctx, tx, ride.ID)
+				if err != nil {
+					writeError(w, http.StatusInternalServerError, err)
+					return
+				}
+			} else {
 				writeError(w, http.StatusInternalServerError, err)
 				return
 			}
 		} else {
-			writeError(w, http.StatusInternalServerError, err)
-			return
+			status = yetSentRideStatus.Status
+			rideStatusCache.Set(cacheKeyRideStatus, yetSentRideStatus)
 		}
-	} else {
-		status = yetSentRideStatus.Status
 	}
 
-	user := &User{}
-	err = tx.GetContext(ctx, user, "SELECT * FROM users WHERE id = ? FOR SHARE", ride.UserID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-
-	if yetSentRideStatus.ID != "" {
-		_, err := tx.ExecContext(ctx, `UPDATE ride_statuses SET chair_sent_at = CURRENT_TIMESTAMP(6) WHERE id = ?`, yetSentRideStatus.ID)
+	// Userデータをキャッシュから取得
+	cacheKeyUser := ride.UserID // キーを文字列化
+	user, found := userCache.Get(cacheKeyUser)
+	if !found {
+		user = &User{}
+		err = tx.GetContext(ctx, user, "SELECT * FROM users WHERE id = ? FOR SHARE", ride.UserID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+		userCache.Set(cacheKeyUser, user)
 	}
 
+	// RideStatusを更新
+	if yetSentRideStatus.ID != "" {
+		_, err := tx.ExecContext(ctx, "UPDATE ride_statuses SET chair_sent_at = CURRENT_TIMESTAMP(6) WHERE id = ?", yetSentRideStatus.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		// キャッシュの更新
+		rideStatusCache.Delete(cacheKeyRideStatus)
+	}
+
+	// トランザクションのコミット
 	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 
+	// レスポンスの作成
 	writeJSON(w, http.StatusOK, &chairGetNotificationResponse{
 		Data: &chairGetNotificationResponseData{
 			RideID: ride.ID,
